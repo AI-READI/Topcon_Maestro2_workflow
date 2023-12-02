@@ -5,6 +5,7 @@ import sys
 import os
 import zipfile
 import tempfile
+import logging
 
 import azure.storage.filedatalake as azurelake
 
@@ -28,12 +29,11 @@ def execute_dicom_export(input_file_path, output_folder_path):
 def main():
     """script downloads maestro files to local, runs executable, then bundles output and uploads to data lake stage-1 container"""
     project_name = "AI-READI"
-    site_names = ["site-test"]
+    site_names = ["site-test", "UW", "UAB", "UCSD"]
     device_name = "Maestro2"
     filter_date = get_filter_date()
 
     dicom_executable_location = os.path.abspath("./DICOMOCTExport_2/DICOMOCTExport_2/DicomOctExport.exe")
-    dicom_args = "-octa -enfaceSlabs -overlayDcm -segDcm -dcm"
 
     # create datalake clients
     source_service_client = azurelake.FileSystemClient.from_connection_string(
@@ -53,28 +53,29 @@ def main():
             local_file_name = f"{file_name.rsplit(sep='/', maxsplit=-1)[-1]}"
             file_client = source_service_client.get_file_client(file_path=file_name)
             [maestro_input_file, maestro_input_file_path] = tempfile.mkstemp(suffix='.fda', prefix=local_file_name)
+            logging.info('here I am')
             with os.fdopen(fd=maestro_input_file, mode="wb") as fp:
                 fp.write(file_client.download_file().readall())
+            logging.info("here now")
             # os.close(maestro_input_file)
             with tempfile.TemporaryDirectory(delete=False) as maestro_output_dir:
-                # run executable
-                # execute_dicom_export(input_file_path=maestro_input_file_path, output_folder_path=maestro_output_dir)
-                subprocess.call(args=[dicom_executable_location, maestro_input_file_path, maestro_output_dir, dicom_args], stdout=sys.stdout)
-                # once complete, zip all contents of directory file
+            # maestro_output_dir = tempfile.mkdtemp()
+            # run executable
+                subprocess.call([dicom_executable_location, maestro_input_file_path, maestro_output_dir, "-octa", "-enfaceSlabs", "-overlayDcm", "-segDcm", "-dcm"], stdout=sys.stdout)            # once complete, zip all contents of directory file
                 zip_file_base_name = f"{site_name}_{device_name}_{site_name}_{device_name}_{filter_date}_{local_file_name}.zip"
-                # archive = shutil.make_archive(base_name=zip_file_base_name,format="zip",base_dir=maestro_output_dir,root_dir=maestro_output_dir)
                 with zipfile.ZipFile(file=zip_file_base_name,mode='w',compression=zipfile.ZIP_DEFLATED) as archive:
                     for (dir_path, dir_name, file_list) in os.walk(maestro_output_dir):
                         for file in file_list:
                             file_path = os.path.join(dir_path, file)
                             archive.write(filename=file_path, arcname=file)
-                
                 # upload to stage-1 container
                 destination_container_client = destination_service_client.get_file_client(file_path=f"{destination_directory}/{zip_file_base_name}")
                 with open(file=zip_file_base_name, mode="rb") as f:
                     destination_container_client.upload_data(f, overwrite=True)
-                # os.remove(zip_file_base_name)
-                # os.remove(maestro_input_file_path)
-
+            os.remove(zip_file_base_name)
+            # os.remove(maestro_input_file_path)
+        # remove logs
+        log_path = os.path.abspath("./logs")
+        os.remove(log_path)
 if __name__ == "__main__":
     main()
